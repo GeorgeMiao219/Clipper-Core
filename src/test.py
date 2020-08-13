@@ -1,5 +1,7 @@
 from src.clip import Clip
 from src.clipManager import ClipManager
+from src.B2session import BtnSession
 
-c = ClipManager()
-c.new_cat(1, 1)
+c = BtnSession()
+a = BtnSession()
+print(id(c), id(a))

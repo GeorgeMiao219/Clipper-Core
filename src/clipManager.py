@@ -124,8 +124,7 @@ class ClipManager:
         return requests.get(self._cf_endpoint).json()
 
     def _load_clips(self):
-        ret = []
-        for x in self._cat:
+        pass
 
     def _load_init(self):
         self._cat = self._load_cat()

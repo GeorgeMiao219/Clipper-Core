@@ -23,20 +23,22 @@ class Clip:
         self.normalized_path = None
         self.file_url = None
         self.published = False
+        self.b2session = b2session
         self._generate()
 
-    def publish(self, cat, name):
-
-        self.published = True
-        return self
-
-    def _valid_time(self, *t):
-        return all([self._time_pattern.match(x) for x in t])
-
-    def _generate(self) -> 'Clip':
+    def generate(self) -> 'Clip':
         self._download()
         self._normalize()
         return self
+
+    def upload(self):
+        return self.b2session.upload(self)
+
+    def publish(self):
+        pass
+
+    def _valid_time(self, *t):
+        return all([self._time_pattern.match(x) for x in t])
 
     def _download(self):
         sub_arg = ['-ss', self.start]
