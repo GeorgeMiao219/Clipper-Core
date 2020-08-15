@@ -3,10 +3,13 @@ import re
 import uuid
 import json
 import atexit
-from typing import Optional
+import subprocess as sp
+from logging import getLogger
+from typing import Optional, Dict, AnyStr
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from time import time
+from functools import wraps
 
 from src.exception import ClipError
 
@@ -14,6 +17,20 @@ from requests import Session
 from youtube_dl import YoutubeDL
 from ffmpeg_normalize import FFmpegNormalize
 from b2sdk.v1 import InMemoryAccountInfo, B2Api
+
+lg = getLogger("Clipper")
+
+
+def log(*args):
+    lg.info(f"[Clipper] {' '.join([str(x) for x in args])}")
+
+
+def log_this(func):
+    @wraps(func)
+    def inner(*args, **kwargs):
+        log(func.__name__, "called")
+        return func(*args, **kwargs)
+    return inner
 
 
 def gen_id():
@@ -33,6 +50,7 @@ class Clip:
     end: str = None
     uid: str = field(default_factory=gen_id)
     download_path: Path = None
+    trimmed_path: Path = None
     normalized_path: Path = None
     file_url: str = None
     published: bool = False
@@ -45,14 +63,17 @@ class Clipper:
 
     def __new__(cls, *args, **kwargs):
         if not cls.instance:
+            log("No Clipper instance found, creating new instance")
             obj = object.__new__(cls)
             cls.instance = obj
             return obj
         else:
+            log("Instamce of Clipper already exists, return it")
             return cls.instance
 
     def __init__(self):
-        self.clips = None
+        log("Initializing Clipper")
+        self.clips: Dict[AnyStr, Clip] = None
         self.load_local_clips()
         self.meta = ClipsMeta.from_url(os.environ["TOKEN"])
         key_id = os.environ["B2_KEY_ID"]
@@ -61,17 +82,22 @@ class Clipper:
             raise ClipError("Credential for B2 is needed, "
                             "set B2_KEY_ID and B2_APP_KEY "
                             "as environment variable or pass in as arguments")
+        log("Initializing B2")
         info = InMemoryAccountInfo()
         self._api = B2Api(info)
         self._api.authorize_account("production", key_id, app_key)
         self._bucket = self._api.get_bucket_by_name("RushiaBtn")
         self._file_link_template = "https://f002.backblazeb2.com/file/RushiaBtn/{}"
+        log("Done initializing Clipper")
 
+    @log_this
     def load_local_clips(self):
         if self._local_clips_path.exists():
+            log("Loading clip info from", self._local_clips_path)
             with open(self._local_clips_path, "r") as f:
                 self.clips = {k: Clip(**v) for k, v in json.load(f).items()}
         else:
+            log("Unable to find", self._local_clips_path, "creating")
             self._local_clips_path.touch()
             with open(self._local_clips_path, "w") as f:
                 self.clips = dict()
@@ -83,7 +109,9 @@ class Clipper:
             raise ClipError(f"Unable to find clip #{uid}")
         return clip
 
-    def new_clip(self, url, start, end):
+    @log_this
+    def new_clip(self, url, start=None, end=None):
+        log("Creating new clip")
         if start and not self._time_pattern.match(start):
             raise ClipError("Invalid start")
         if end and not self._time_pattern.match(end):
@@ -93,37 +121,67 @@ class Clipper:
         self.clips[uid] = clip
         return uid
 
-    def download_clip(self, uid):
+    @log_this
+    def download_clip(self, uid, force=False):
         clip = self.search(uid)
-        sub_arg = ['-ss', clip.start]
-        out = f"storage/{clip.uid}.%(ext)s"
-        if clip.end:
-            sub_arg.extend(['-to', clip.end])
+        for c in self.clips.values():
+            if c.download_path and clip.url == c.url:
+                clip.download_path = c.download_path
+                break
+        if clip.download_path and not force:
+            log(f"{uid} is already downloaded, pass")
+            return
+        download_path = f"storage/{clip.uid}.%(ext)s"
         with YoutubeDL({
-            'format': 'bestaudio',
+            'format': 'bestaudio/best',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
+                'preferredcodec': 'opus',
                 'preferredquality': '192'
             }],
-            'postprocessor_args': sub_arg,
-            'prefer_ffmpeg': True,
-            'outtmpl': out
+            'outtmpl': download_path
         }) as ytdl:
             ytdl.download([clip.url])
-        clip.download_path = out % {'ext': 'mp3'}
+        print("done")
+        clip.download_path = download_path % {'ext': 'opus'}
         return True
 
+    @log_this
+    def trim_clip(self, uid):
+        clip = self.search(uid)
+        trimmed_path = f"trimmed/{uid}.mp3"
+        cmd = [
+            'ffmpeg',
+            '-y',
+            '-i', clip.download_path,
+            '-ss', clip.start
+        ]
+        if clip.end:
+            cmd.extend(['-to', clip.end])
+        cmd.append(trimmed_path)
+        log("Trim", uid, "with cmd: ", *cmd)
+        res = sp.Popen(cmd, stdout=sp.PIPE, stderr=sp.PIPE)
+        try:
+            code = res.wait(timeout=60)
+        except sp.TimeoutExpired as e:
+            raise ClipError(f"Timeout while trimming {uid}")
+        if code != 0:
+            raise ClipError(res.stderr)
+        else:
+            clip.trimmed_path = trimmed_path
+
+    @log_this
     def normalize_clip(self, uid):
         clip = self.search(uid)
         fn = FFmpegNormalize(normalization_type="rms",
                              audio_codec="libmp3lame",
                              target_level=-16)
         out = f"normalized/{clip.uid}.mp3"
-        fn.add_media_file(clip.download_path, out)
+        fn.add_media_file(clip.trimmed_path, out)
         fn.run_normalization()
         clip.normalized_path = out
 
+    @log_this
     def upload_clip(self, uid):
         clip = self.search(uid)
         full_name = f"{clip.uid}.mp3"
@@ -131,19 +189,23 @@ class Clipper:
                                        file_name=full_name)
         clip.file_url = self._file_link_template.format(full_name)
 
+    @log_this
     def generate(self, url, start, end):
         uid = self.new_clip(url, start, end)
         self.download_clip(uid)
+        self.trim_clip(uid)
         self.normalize_clip(uid)
         self.upload_clip(uid)
         return uid
 
+    @log_this
     def publish_clip(self, uid, cat, names):
         clip = self.search(uid)
         self.meta.put_clip(clip, cat, names)
         self.meta.upload()
         clip.published = True
 
+    @log_this
     def put_cat(self, _id, names):
         self.meta.put_cat(_id, names)
 
@@ -191,6 +253,7 @@ class ClipsMeta:
 
     def put_cat(self, _id, names):
         self.categories[_id] = names
+        self.upload()
 
     def put_clip(self, clip: Clip, cat, names):
         if cat not in self.categories.keys():

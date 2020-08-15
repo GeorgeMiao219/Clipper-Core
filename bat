@@ -1,0 +1,6 @@
+https://youtu.be/JwS1UNYj-oY 00:02:11 00:02:14 moe zh:"早上好" en:"Good Morning!"
+https://youtu.be/DXEHmmxe88c 00:04:02 00:04:04 moe zh:"谢谢里" en:"Thank you berrry muchhh!"
+https://youtu.be/_6_gwZd-HEE 00:06:50 00:06:52 memes en:"Yattaze!"
+https://youtu.be/_6_gwZd-HEE 00:09:19 00:09:21 moe en:"nya!"
+https://youtu.be/_6_gwZd-HEE 00:10:55 00:10:57 memes zh:"啊，啊，吓死我了（无感情）"en:"Ah.Ah. That's*scary*"
+https://youtu.be/_6_gwZd-HEE 00:12:39 00:12:40 moe zh:"绝叫#2" en:"scared rushia sound #2"
